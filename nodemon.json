@@ -1,0 +1,9 @@
+{
+  "ignore": [
+    "uploads/*",
+    "*.png",
+    "*.jpg",
+    "*.jpeg",
+    "*.webp"
+  ]
+}
