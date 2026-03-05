@@ -17,15 +17,16 @@ const app = express()
    Security Middleware
 ========================================= */
 app.use(helmet())
-
 app.use(
   cors({
-    origin: "*", // change to frontend domain in production
-    methods: ["GET", "POST", "PUT", "DELETE", "PATCH"], // PATCH added
+    origin: [
+      "http://localhost:5173",
+      "https://scanner-frontend-klw7231q3-sandeeps-projects-f9c1d65d.vercel.app"
+    ],
+    methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
     credentials: true
   })
 )
-
 /* =========================================
    Logging
 ========================================= */
