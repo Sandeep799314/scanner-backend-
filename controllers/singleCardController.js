@@ -10,6 +10,9 @@ import appendToSheet from "../services/googleSheetService.js";
    Upload & Process Single Card
 ========================================= */
 export const uploadSingleCard = async (req, res, next) => {
+  const frontFile = req.files?.front_image?.[0];
+  const backFile = req.files?.back_image?.[0];
+
   try {
     /* ===============================
        Cloudinary Config
@@ -17,118 +20,116 @@ export const uploadSingleCard = async (req, res, next) => {
     cloudinary.config({
       cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
       api_key: process.env.CLOUDINARY_API_KEY,
-      api_secret: process.env.CLOUDINARY_API_SECRET
+      api_secret: process.env.CLOUDINARY_API_SECRET,
     });
 
-    const frontFile = req.files?.front_image?.[0];
-    const backFile = req.files?.back_image?.[0];
-
     if (!frontFile) {
-      return res.status(400).json({
-        message: "Front image is required"
-      });
+      return res.status(400).json({ message: "Front image is required" });
     }
 
     /* ===============================
-       1️⃣ OCR PROCESSING
+       1️⃣ OCR — Parallel ⚡
     =============================== */
-    const frontData = await singleOcrService(frontFile.path);
+    const ocrPromises = [singleOcrService(frontFile.path)];
+    if (backFile) ocrPromises.push(singleOcrService(backFile.path));
+
+    const [frontData, backData] = await Promise.all(ocrPromises);
 
     if (!frontData || !frontData.rawText) {
       throw new Error("OCR failed for front image");
     }
 
     let combinedData = { ...frontData };
-
-    if (backFile) {
-      const backData = await singleOcrService(backFile.path);
-
-      if (backData && backData.rawText) {
-        combinedData.rawText =
-          frontData.rawText + "\n" + backData.rawText;
-      }
+    if (backFile && backData?.rawText) {
+      combinedData.rawText = frontData.rawText + "\n" + backData.rawText;
     }
 
     /* ===============================
-       2️⃣ UPLOAD TO CLOUDINARY
+       2️⃣ Cloudinary + Duplicate Check — Parallel ⚡
     =============================== */
-    const frontUpload = await cloudinary.uploader.upload(frontFile.path, {
-      folder: "card_scanner_uploads",
-    });
-
-    let backImageUrl = null;
-
-    if (backFile) {
-      const backUpload = await cloudinary.uploader.upload(backFile.path, {
+    const uploadPromises = [
+      cloudinary.uploader.upload(frontFile.path, {
         folder: "card_scanner_uploads",
-      });
-      backImageUrl = backUpload.secure_url;
+      }),
+    ];
+    if (backFile) {
+      uploadPromises.push(
+        cloudinary.uploader.upload(backFile.path, {
+          folder: "card_scanner_uploads",
+        })
+      );
     }
+
+    const duplicatePromise =
+      combinedData.email || combinedData.phone
+        ? Card.findOne({
+            $or: [
+              combinedData.email ? { email: combinedData.email } : null,
+              combinedData.phone ? { phone: combinedData.phone } : null,
+            ].filter(Boolean),
+          })
+        : Promise.resolve(null);
+
+    const [uploadResults, existing] = await Promise.all([
+      Promise.all(uploadPromises),
+      duplicatePromise,
+    ]);
+
+    const frontImageUrl = uploadResults[0].secure_url;
+    const backImageUrl = backFile ? uploadResults[1].secure_url : null;
 
     /* ===============================
-       3️⃣ DUPLICATE CHECK
+       3️⃣ DB Save / Update
     =============================== */
-    let existing = null;
-
-    if (combinedData.email || combinedData.phone) {
-      existing = await Card.findOne({
-        $or: [
-          combinedData.email ? { email: combinedData.email } : null,
-          combinedData.phone ? { phone: combinedData.phone } : null,
-        ].filter(Boolean),
-      });
-    }
-
     let savedCard;
 
     if (existing) {
-      savedCard = existing;
-      savedCard.imageUrl = frontUpload.secure_url;
-      savedCard.backImageUrl = backImageUrl;
-      Object.assign(savedCard, combinedData);
-      await savedCard.save();
+      existing.imageUrl = frontImageUrl;
+      existing.backImageUrl = backImageUrl;
+      Object.assign(existing, combinedData);
+      savedCard = await existing.save();
     } else {
       savedCard = await Card.create({
         ...combinedData,
-        imageUrl: frontUpload.secure_url,
-        backImageUrl
+        imageUrl: frontImageUrl,
+        backImageUrl,
       });
     }
 
     /* ===============================
-       4️⃣ WHATSAPP LINK & SHEET SYNC
+       4️⃣ WhatsApp Link
     =============================== */
     const whatsappLink = generateWhatsappLink(savedCard);
 
-    try {
-      await appendToSheet({
-        ...savedCard.toObject(),
-        whatsappLink,
-        imageUrl: frontUpload.secure_url,
-        backImageUrl
-      });
-    } catch (sheetError) {
-      console.error("Sheet Error:", sheetError.message);
-    }
-
     /* ===============================
-       5️⃣ DELETE LOCAL FILES
+       5️⃣ Local Files Delete
     =============================== */
     if (fs.existsSync(frontFile.path)) fs.unlinkSync(frontFile.path);
     if (backFile && fs.existsSync(backFile.path))
       fs.unlinkSync(backFile.path);
 
     /* ===============================
-       ✅ FINAL RESPONSE (UPDATED)
+       ✅ RESPONSE — Full Data
     =============================== */
-console.log("FINAL RESPONSE DATA:", {
-  ...savedCard.toObject(),
-  whatsappLink
-});
-    return res.status(201).json({
+    console.log("FINAL RESPONSE DATA:", {
       ...savedCard.toObject(),
-      whatsappLink
+      whatsappLink,
     });
+
+    res.status(201).json({
+      ...savedCard.toObject(),
+      whatsappLink,
+    });
+
+    /* ===============================
+       6️⃣ BACKGROUND — Sheet Only ⚡
+    =============================== */
+    appendToSheet({
+      ...savedCard.toObject(),
+      whatsappLink,
+      imageUrl: frontImageUrl,
+      backImageUrl,
+    }).catch((err) => console.error("Sheet Error:", err.message));
 
   } catch (error) {
     console.error("Single Card Upload Error:", error.message);
