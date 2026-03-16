@@ -23,7 +23,8 @@ app.use(
     origin: [
       "http://localhost:5173",
        "https://scanner-frontend-two.vercel.app", // 👈 add this
-      "https://scanner-frontend-klw7231q3-sandeeps-projects-f9c1d65d.vercel.app"
+      "https://scanner-frontend-klw7231q3-sandeeps-projects-f9c1d65d.vercel.app",
+       "https://oneside-form-git-main-sandeeps-projects-f9c1d65d.vercel.app"
     ],
     methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
     credentials: true
